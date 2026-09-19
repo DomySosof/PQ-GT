@@ -94,6 +94,11 @@ tr.total:hover td{background:#e2e8f0}
 .login-box .btn{width:100%;margin-top:10px}
 .user-bar{display:flex;align-items:center;gap:10px;margin-bottom:20px}
 .user-bar select{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px}
+.sb-logout{padding:10px}
+.sb-logout .item{padding:10px 15px;border-radius:8px;cursor:pointer;color:#fca5a5;font-size:14px;background:rgba(239,68,68,.15);transition:0.2s}
+.sb-logout .item:hover{background:rgba(239,68,68,.35)}
+.sb-logout .item span{margin-left:8px}
+.sidebar.collapsed .sb-logout span{display:none}
 @media(max-width:768px){.sidebar{transform:translateX(-100%)}.sidebar.mobile-show{transform:translateX(0)}.main{margin-left:0}}
 </style>
 </head>
@@ -139,6 +144,9 @@ tr.total:hover td{background:#e2e8f0}
     <div class="sb-note">Impuesto=Ingresos x 5%<br>Total=MAX(0,Imp-Ret)<br>Acumulado=SUMA mensual</div>
     <div class="sb-warn">Solo retencion si Agente</div>
   </nav>
+  <div class="sb-logout">
+    <div class="item" onclick="logout()"><span>&#128682; Salir / Cambiar Cuenta</span></div>
+  </div>
 </aside>
 <main class="main">
 <div class="section active" id="sec-dash">
@@ -148,6 +156,7 @@ tr.total:hover td{background:#e2e8f0}
     <div class="card"><div class="icon">Monedas</div><div class="val" id="cIngresos">Q 0</div><div class="lbl">Ingresos Totales</div></div>
     <div class="card"><div class="icon">Grafica</div><div class="val" id="cImpuesto">Q 0</div><div class="lbl">IVA Causado</div></div>
     <div class="card"><div class="icon">Banco</div><div class="val" id="cTotal">Q 0</div><div class="lbl">Pagar SAT</div></div>
+    <div class="card"><div class="icon">Cartera</div><div class="val" id="cSaldo">Q 0</div><div class="lbl">Saldo Disponible (Vendido - Comprado + Saldo Inicial)</div></div>
     <div class="card"><div class="icon">Alerta</div><div class="val" id="cAlerta">--</div><div class="lbl">Alerta</div></div>
   </div>
   <div class="charts-row">
@@ -155,7 +164,7 @@ tr.total:hover td{background:#e2e8f0}
     <div class="chart-box"><h3>Acumulado vs Limite Anual</h3><canvas id="lineChart"></canvas></div>
   </div>
   <table>
-    <thead><tr><th>Mes</th><th>Saldo Inicial</th><th>Ingresos</th><th>Compras/Gastos</th><th>Retenciones</th><th>Impuesto (5%)</th><th>Total Pagar</th><th>Acumulado</th><th>Alerta</th></tr></thead>
+    <thead><tr><th>Mes</th><th>Saldo Inicial</th><th>Ingresos</th><th>Compras/Gastos</th><th>Retenciones</th><th>Impuesto (5%)</th><th>Total Pagar</th><th>Acumulado</th><th>Saldo Mes</th><th>Alerta</th></tr></thead>
     <tbody id="tblBody"></tbody>
   </table>
 </div>
@@ -210,6 +219,9 @@ tr.total:hover td{background:#e2e8f0}
     <div class="form-row">
       <div class="form-group"><label>Color Linea Acumulado</label><input id="ccAcumulado" type="color" value="#10b981"></div>
       <div class="form-group"><label>Color Limite</label><input id="ccLimite" type="color" value="#ef4444"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Color Compras/Gastos</label><input id="ccCompras" type="color" value="#8b5cf6"></div>
     </div>
     <h2 style="margin-top:20px">Estilo de Graficos</h2>
     <div class="form-row">
@@ -307,16 +319,21 @@ async function dash(){
     var ti=c.reduce(function(a,d){return a+d.ingresos},0);
     var ti2=c.reduce(function(a,d){return a+(d.ingresos*cfg.tasa_iva)},0);
     var tp=c.reduce(function(a,d){return a+(Math.max(0,d.ingresos*cfg.tasa_iva-d.retenciones))},0);
+    var tc=c.reduce(function(a,d){return a+d.compra_gastos},0);
+    var ts=c.reduce(function(a,d){return a+d.saldo_inicial},0);
+    var saldoDisp=ti-tc+ts;
     var acum=0,alm=null;
     c.forEach(function(d){acum+=d.ingresos;if(acum>cfg.limite_anual&&!alm)alm=d.nombre});
     document.getElementById('cIngresos').textContent='Q '+fmt(ti);
     document.getElementById('cImpuesto').textContent='Q '+fmt(ti2);
     document.getElementById('cTotal').textContent='Q '+fmt(tp);
+    document.getElementById('cSaldo').textContent='Q '+fmt(saldoDisp);
     document.getElementById('cAlerta').textContent=alm?alm:'Sin alerta';
     document.getElementById('limVal').textContent='Q '+fmt(cfg.limite_anual);
 
     var months=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
     var ing=c.map(function(d){return d.ingresos});
+    var comp=c.map(function(d){return d.compra_gastos});
     var ret=c.map(function(d){return d.retenciones});
     var acu=[];var a2=0;c.forEach(function(d){a2+=d.ingresos;acu.push(a2)});
 
@@ -324,29 +341,30 @@ async function dash(){
     c.forEach(function(d){
       var sc=d.acumulado>cfg.limite_anual?'danger':'ok';
       var st=d.acumulado>cfg.limite_anual?'LIMITE SUPERADO':'OK';
-      html+='<tr><td>'+d.nombre+'</td><td class="num">'+fmt(d.saldo_inicial)+'</td><td class="num editable" onclick="editD(this,'+d.id+')">'+fmt(d.ingresos)+'</td><td class="num">'+fmt(d.compra_gastos)+'</td><td class="num editable" onclick="editD(this,'+d.id+',true)">'+fmt(d.retenciones)+'</td><td class="num">'+fmt(d.ingresos*cfg.tasa_iva)+'</td><td class="num">'+fmt(Math.max(0,d.ingresos*cfg.tasa_iva-d.retenciones))+'</td><td class="num">'+fmt(d.acumulado||0)+'</td><td><span class="'+sc+'">'+st+'</span></td></tr>';
+      var saldoMes=d.saldo_inicial+d.ingresos-d.compra_gastos;
+      html+='<tr><td>'+d.nombre+'</td><td class="num editable" onclick="editD(this,'+d.id+',\'saldo\')">'+fmt(d.saldo_inicial)+'</td><td class="num editable" onclick="editD(this,'+d.id+')">'+fmt(d.ingresos)+'</td><td class="num editable" onclick="editD(this,'+d.id+',\'comp\')">'+fmt(d.compra_gastos)+'</td><td class="num editable" onclick="editD(this,'+d.id+',\'ret\')">'+fmt(d.retenciones)+'</td><td class="num">'+fmt(d.ingresos*cfg.tasa_iva)+'</td><td class="num">'+fmt(Math.max(0,d.ingresos*cfg.tasa_iva-d.retenciones))+'</td><td class="num">'+fmt(d.acumulado||0)+'</td><td class="num">'+fmt(saldoMes)+'</td><td><span class="'+sc+'">'+st+'</span></td></tr>';
     });
-    html+='<tr class="total"><td>TOTAL</td><td>--</td><td class="num">'+fmt(ti)+'</td><td class="num">--</td><td class="num">'+fmt(c.reduce(function(a,d){return a+d.retenciones},0))+'</td><td class="num">'+fmt(ti2)+'</td><td class="num">'+fmt(tp)+'</td><td class="num">--</td><td>--</td></tr>';
+    html+='<tr class="total"><td>TOTAL</td><td class="num">'+fmt(ts)+'</td><td class="num">'+fmt(ti)+'</td><td class="num">'+fmt(tc)+'</td><td class="num">'+fmt(c.reduce(function(a,d){return a+d.retenciones},0))+'</td><td class="num">'+fmt(ti2)+'</td><td class="num">'+fmt(tp)+'</td><td class="num">--</td><td class="num">'+fmt(saldoDisp)+'</td><td>--</td></tr>';
     document.getElementById('tblBody').innerHTML=html;
 
     if(barChart)barChart.destroy();
     if(lineChart)lineChart.destroy();
-    var ingCol=getCfgColor('ing');var retCol=getCfgColor('ret');var acuCol=getCfgColor('acu');var limCol=getCfgColor('lim');var bgCol=getCfgBg();
-    barChart=new Chart(document.getElementById('barChart'),{type:cfg.tipo_grafico||'bar',data:{labels:months,datasets:[{label:'Ingresos',data:ing,backgroundColor:ingCol,borderRadius:6,borderSkipped:false},{label:'Retenciones',data:ret,backgroundColor:retCol,borderRadius:6,borderSkipped:false}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:12,font:{size:10}}}},scales:{y:{beginAtZero:true,grid:{color:'#f1f5f9'},ticks:{callback:function(v){return'Q '+v.toLocaleString()}},font:{size:9}},x:{grid:{display:false},ticks:{font:{size:9}}}}}
+    var ingCol=getCfgColor('ing');var compCol=getCfgColor('comp','#8b5cf6');var retCol=getCfgColor('ret');var acuCol=getCfgColor('acu');var limCol=getCfgColor('lim');var bgCol=getCfgBg();
+    barChart=new Chart(document.getElementById('barChart'),{type:cfg.tipo_grafico||'bar',data:{labels:months,datasets:[{label:'Ingresos (Vendido)',data:ing,backgroundColor:ingCol,borderRadius:6,borderSkipped:false},{label:'Compras/Gastos',data:comp,backgroundColor:compCol,borderRadius:6,borderSkipped:false},{label:'Retenciones',data:ret,backgroundColor:retCol,borderRadius:6,borderSkipped:false}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:12,font:{size:10}}}},scales:{y:{beginAtZero:true,grid:{color:'#f1f5f9'},ticks:{callback:function(v){return'Q '+v.toLocaleString()}},font:{size:9}},x:{grid:{display:false},ticks:{font:{size:9}}}}}
     });
     lineChart=new Chart(document.getElementById('lineChart'),{type:'line',data:{labels:months,datasets:[{label:'Acumulado',data:acu,borderColor:acuCol,backgroundColor:acuCol+'20',fill:true,tension:0.4,pointRadius:4,pointHoverRadius:6},{label:'Limite Q '+fmt(cfg.limite_anual),data:Array(12).fill(cfg.limite_anual),borderColor:limCol,borderDash:[6,4],pointRadius:0,fill:false}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:12,font:{size:10}}}},scales:{y:{beginAtZero:true,grid:{color:'#f1f5f9'},ticks:{callback:function(v){return'Q '+v.toLocaleString()}},font:{size:9}},x:{grid:{display:false},ticks:{font:{size:9}}}}}
     });
   }catch(e){console.error('dash error:',e);toast('Error al cargar dashboard',true)}
 }
 
-function getCfgColor(type){try{return localStorage.getItem('cfg_'+type)||'#4f46e5'}catch(e){return '#4f46e5'}}
+function getCfgColor(type,def){try{return localStorage.getItem('cfg_'+type)||def||'#4f46e5'}catch(e){return def||'#4f46e5'}}
 function getCfgBg(){try{return localStorage.getItem('cfg_bg')||'#ffffff'}catch(e){return'#ffffff'}}
 
-async function editD(cell,id,isRet){
+async function editD(cell,id,field){
   if(cell.querySelector('input'))return;
   var d=datos.find(function(x){return x.id===id});
   if(!d){toast('Dato no encontrado',true);return}
-  var cur=isRet?d.retenciones:d.ingresos;
+  var cur=field==='ret'?d.retenciones:(field==='comp'?d.compra_gastos:(field==='saldo'?d.saldo_inicial:d.ingresos));
   var inp=document.createElement('input');
   inp.type='number';inp.step='0.01';inp.min='0';inp.value=cur;
   inp.style.textAlign='right';
@@ -354,8 +372,8 @@ async function editD(cell,id,isRet){
   async function done(){
     var val=parseFloat(inp.value);
     if(isNaN(val)||val<0){toast('Valor invalido',true);await dash();return}
-    if(isRet) d.retenciones=val; else d.ingresos=val;
-    await api('/datos/'+id,'PUT',{ingresos:d.ingresos,compra_gastos:d.compra_gastos,retenciones:d.retenciones,usuario_id:currentUserId});
+    if(field==='ret')d.retenciones=val;else if(field==='comp')d.compra_gastos=val;else if(field==='saldo')d.saldo_inicial=val;else d.ingresos=val;
+    await api('/datos/'+id,'PUT',{ingresos:d.ingresos,compra_gastos:d.compra_gastos,retenciones:d.retenciones,saldo_inicial:d.saldo_inicial,usuario_id:currentUserId});
     await dash();
     toast('Dato actualizado');
   }
@@ -391,7 +409,7 @@ async function modif(){
     var html='';
     if(!datos||datos.length===0){html='<p style="padding:20px;color:#888">No hay datos. Cargue datos primero.</p>'}
     datos.forEach(function(d){
-      html+='<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #eee"><label style="min-width:80px;font-weight:600">'+d.nombre+'</label><input type="number" id="mi'+d.id+'" value="'+d.ingresos+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:120px" placeholder="Ingresos"><input type="number" id="mc'+d.id+'" value="'+d.compra_gastos+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:120px" placeholder="Compras/Gastos"><input type="number" id="mr'+d.id+'" value="'+d.retenciones+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:120px" placeholder="Retenciones"><span style="font-size:12px;color:#888;min-width:60px">Imp: '+fmt(d.ingresos*0.05)+'</span><button class="btn btn-sm" onclick="applyM('+d.id+')">Aplicar</button></div>';
+      html+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #eee;flex-wrap:wrap"><label style="min-width:80px;font-weight:600">'+d.nombre+'</label><input type="number" id="ms'+d.id+'" value="'+d.saldo_inicial+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:110px" placeholder="Saldo Inicial"><input type="number" id="mi'+d.id+'" value="'+d.ingresos+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:110px" placeholder="Ingresos"><input type="number" id="mc'+d.id+'" value="'+d.compra_gastos+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:110px" placeholder="Compras/Gastos"><input type="number" id="mr'+d.id+'" value="'+d.retenciones+'" step="0.01" min="0" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;width:110px" placeholder="Retenciones"><span style="font-size:12px;color:#888;min-width:60px">Imp: '+fmt(d.ingresos*0.05)+'</span><button class="btn btn-sm" onclick="applyM('+d.id+')">Aplicar</button></div>';
     });
     document.getElementById('modLista').innerHTML=html;
   }catch(e){console.error('modif error:',e);toast('Error al cargar modificar',true)}
@@ -399,10 +417,11 @@ async function modif(){
 
 async function applyM(id){
   try{
+    var sald=parseFloat(document.getElementById('ms'+id).value)||0;
     var ing=parseFloat(document.getElementById('mi'+id).value)||0;
     var comp=parseFloat(document.getElementById('mc'+id).value)||0;
     var ret=parseFloat(document.getElementById('mr'+id).value)||0;
-    await api('/datos/'+id,'PUT',{ingresos:ing,compra_gastos:comp,retenciones:ret,usuario_id:currentUserId});
+    await api('/datos/'+id,'PUT',{ingresos:ing,compra_gastos:comp,retenciones:ret,saldo_inicial:sald,usuario_id:currentUserId});
     await dash();
     toast('Datos actualizados');
   }catch(e){console.error('applyM error:',e);toast('Error',true)}
@@ -412,10 +431,11 @@ async function guardarMod(){
   try{
     for(var i=0;i<datos.length;i++){
       var d=datos[i];
+      var sald=parseFloat(document.getElementById('ms'+d.id).value)||0;
       var ing=parseFloat(document.getElementById('mi'+d.id).value)||0;
       var comp=parseFloat(document.getElementById('mc'+d.id).value)||0;
       var ret=parseFloat(document.getElementById('mr'+d.id).value)||0;
-      await api('/datos/'+d.id,'PUT',{ingresos:ing,compra_gastos:comp,retenciones:ret,usuario_id:currentUserId});
+      await api('/datos/'+d.id,'PUT',{ingresos:ing,compra_gastos:comp,retenciones:ret,saldo_inicial:sald,usuario_id:currentUserId});
     }
     await dash();
     toast('Todos los cambios guardados');
@@ -433,6 +453,7 @@ async function cfg(){
     document.getElementById('ccRetenciones').value=getCfgColor('ret');
     document.getElementById('ccAcumulado').value=getCfgColor('acu');
     document.getElementById('ccLimite').value=getCfgColor('lim');
+    document.getElementById('ccCompras').value=getCfgColor('comp','#8b5cf6');
     document.getElementById('cbTipo').value=getCfgColor('tipo')||'bar';
     document.getElementById('cbFondo').value=getCfgBg();
   }catch(e){console.error('cfg error:',e)}
@@ -451,6 +472,7 @@ async function guardarCfg(){
     localStorage.setItem('cfg_ret',document.getElementById('ccRetenciones').value);
     localStorage.setItem('cfg_acu',document.getElementById('ccAcumulado').value);
     localStorage.setItem('cfg_lim',document.getElementById('ccLimite').value);
+    localStorage.setItem('cfg_comp',document.getElementById('ccCompras').value);
     localStorage.setItem('cfg_tipo',document.getElementById('cbTipo').value);
     localStorage.setItem('cfg_bg',document.getElementById('cbFondo').value);
     await api('/config','PUT',{salario_minimo:s,multiplo:m,tasa_iva:t,usuario_id:currentUserId,color_ingresos:localStorage.getItem('cfg_ing'),color_retenciones:localStorage.getItem('cfg_ret'),color_acumulado:localStorage.getItem('cfg_acu'),color_limite:localStorage.getItem('cfg_lim'),tipo_grafico:localStorage.getItem('cfg_tipo'),fondo_grafico:localStorage.getItem('cfg_bg')});
@@ -510,16 +532,37 @@ async function doAddUser(){
   }catch(e){toast('Error al crear cuenta',true)}
 }
 
+function logout(){
+  localStorage.removeItem('iva_current_user');
+  currentUserId=null;
+  showLogin();
+  toast('Sesion cerrada');
+}
+
 async function doSwitchUser(){
   var uid=parseInt(document.getElementById('userSelect').value);
   if(!uid){toast('Selecciona una cuenta',true);return}
-  try{await api('/usuarios/activo/'+uid,'POST');currentUserId=uid;var u=users.find(function(x){return x.id===uid});document.getElementById('sbUserName').textContent=u.nombre;hideLogin();await dash();await cargarIngresar()}catch(e){toast('Error',true)}
+  try{
+    await api('/usuarios/activo/'+uid,'POST');
+    currentUserId=uid;
+    localStorage.setItem('iva_current_user',uid);
+    var u=users.find(function(x){return x.id===uid});
+    document.getElementById('sbUserName').textContent=u.nombre;
+    hideLogin();await dash();await cargarIngresar();
+  }catch(e){toast('Error',true)}
 }
 
 async function switchDashUser(){
   var uid=parseInt(document.getElementById('dashUserSelect').value);
   if(!uid)return;
-  try{await api('/usuarios/activo/'+uid,'POST');currentUserId=uid;var u=users.find(function(x){return x.id===uid});document.getElementById('sbUserName').textContent=u.nombre;await dash();await cargarIngresar()}catch(e){toast('Error',true)}
+  try{
+    await api('/usuarios/activo/'+uid,'POST');
+    currentUserId=uid;
+    localStorage.setItem('iva_current_user',uid);
+    var u=users.find(function(x){return x.id===uid});
+    document.getElementById('sbUserName').textContent=u.nombre;
+    await dash();await cargarIngresar();
+  }catch(e){toast('Error',true)}
 }
 
 async function init(){
@@ -527,8 +570,19 @@ async function init(){
     await loadUsers();
     var dashSel=document.getElementById('dashUserSelect');dashSel.innerHTML='';
     users.forEach(function(us){var o=document.createElement('option');o.value=us.id;o.textContent=us.nombre;dashSel.appendChild(o)});
-    // Siempre mostrar login al iniciar: el usuario debe seleccionar o crear su cuenta
-    showLogin();
+    // Sesion persistente: si hay usuario guardado en localStorage, entrar directo
+    var saved=localStorage.getItem('iva_current_user');
+    var u=saved?users.find(function(x){return x.id===parseInt(saved)}):null;
+    if(u){
+      currentUserId=u.id;
+      document.getElementById('userSelect').value=u.id;
+      document.getElementById('sbUserName').textContent=u.nombre;
+      dashSel.value=u.id;
+      hideLogin();
+      await dash();await cargarIngresar();
+    }else{
+      showLogin();
+    }
   }catch(e){console.error('init error:',e);toast('Error al inicializar',true);showLogin()}
 }
 init();

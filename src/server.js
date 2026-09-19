@@ -132,7 +132,7 @@ function getDatos(usuario_id) {
   return db.prepare('SELECT * FROM meses WHERE usuario_id = ? ORDER BY orden').all(uid);
 }
 
-function saveDatos(id, ingresos, compra_gastos, retenciones, usuario_id) {
+function saveDatos(id, ingresos, compra_gastos, retenciones, saldo_inicial, usuario_id) {
   const uid = usuario_id || getActiveUser().id;
   const cfg = getConfig(uid);
   const imp = +(ingresos * cfg.tasa_iva).toFixed(2);
@@ -140,10 +140,14 @@ function saveDatos(id, ingresos, compra_gastos, retenciones, usuario_id) {
   const rows = getDatos(uid);
   let acum = 0;
   for (let r of rows) {
-    if (r.id === id) { acum += ingresos; r.acumulado = acum; r.ingresos = ingresos; r.compra_gastos = compra_gastos; r.retenciones = retenciones; r.impuesto = imp; r.total_pagar = tot; }
+    if (r.id === id) {
+      acum += ingresos; r.acumulado = acum; r.ingresos = ingresos; r.compra_gastos = compra_gastos; r.retenciones = retenciones;
+      if (saldo_inicial !== undefined && saldo_inicial !== null) r.saldo_inicial = saldo_inicial;
+      r.impuesto = imp; r.total_pagar = tot;
+    }
     else { acum += r.ingresos; r.acumulado = acum; r.impuesto = +(r.ingresos * cfg.tasa_iva).toFixed(2); r.total_pagar = +(Math.max(0, r.impuesto - r.retenciones)).toFixed(2); }
     r.alerta = r.acumulado > cfg.limite_anual ? 'LIMITE SUPERADO' : 'OK';
-    db.prepare('UPDATE meses SET ingresos = ?, compra_gastos = ?, retenciones = ?, impuesto = ?, total_pagar = ?, acumulado = ?, alerta = ? WHERE id = ?').run(r.ingresos, r.compra_gastos, r.retenciones, r.impuesto, r.total_pagar, r.acumulado, r.alerta, r.id);
+    db.prepare('UPDATE meses SET ingresos = ?, compra_gastos = ?, retenciones = ?, saldo_inicial = ?, impuesto = ?, total_pagar = ?, acumulado = ?, alerta = ? WHERE id = ?').run(r.ingresos, r.compra_gastos, r.retenciones, r.saldo_inicial, r.impuesto, r.total_pagar, r.acumulado, r.alerta, r.id);
   }
   return { impuesto: imp, total_pagar: tot, acumulado: rows.filter(r => r.id <= id).reduce((a, r) => a + r.ingresos, 0) };
 }
@@ -156,7 +160,7 @@ app.post('/api/usuarios/activo/:id', (req, res) => { res.json({ok:true, user: ge
 app.get('/api/config', (req, res) => { res.json(getConfig(req.query.usuario_id)); });
 app.put('/api/config', (req, res) => { res.json(saveConfig(req.body, req.body.usuario_id)); });
 app.get('/api/datos', (req, res) => { res.json(getDatos(req.query.usuario_id)); });
-app.put('/api/datos/:id', (req, res) => { res.json(saveDatos(parseInt(req.params.id), req.body.ingresos, req.body.compra_gastos, req.body.retenciones, req.body.usuario_id)); });
+app.put('/api/datos/:id', (req, res) => { res.json(saveDatos(parseInt(req.params.id), req.body.ingresos, req.body.compra_gastos, req.body.retenciones, req.body.saldo_inicial, req.body.usuario_id)); });
 app.post('/api/datos/import', (req, res) => {
   const { salario_minimo, multiplo, tasa_iva, usuario_id, datos } = req.body;
   const cfg = saveConfig({ salario_minimo, multiplo, tasa_iva }, usuario_id);
@@ -165,9 +169,9 @@ app.post('/api/datos/import', (req, res) => {
     datos.forEach(d => {
       const exists = db.prepare('SELECT id FROM meses WHERE usuario_id = ? AND nombre = ?').get(usuario_id, d.mes);
       if (exists) {
-        db.prepare('UPDATE meses SET ingresos = ?, compra_gastos = ?, retenciones = ? WHERE usuario_id = ? AND nombre = ?').run(d.ingresos, d.compra_gastos || 0, d.retenciones || 0, usuario_id, d.mes);
+        db.prepare('UPDATE meses SET ingresos = ?, compra_gastos = ?, retenciones = ?, saldo_inicial = ? WHERE usuario_id = ? AND nombre = ?').run(d.ingresos, d.compra_gastos || 0, d.retenciones || 0, d.saldo_inicial || 0, usuario_id, d.mes);
       } else {
-        db.prepare('INSERT INTO meses (usuario_id, nombre, orden, ingresos, compra_gastos, retenciones) VALUES (?, ?, ?, ?, ?, ?)').run(usuario_id, d.mes, 0, d.ingresos, d.compra_gastos || 0, d.retenciones || 0);
+        db.prepare('INSERT INTO meses (usuario_id, nombre, orden, ingresos, compra_gastos, retenciones, saldo_inicial) VALUES (?, ?, ?, ?, ?, ?, ?)').run(usuario_id, d.mes, 0, d.ingresos, d.compra_gastos || 0, d.retenciones || 0, d.saldo_inicial || 0);
       }
     });
     const allRows = getDatos(usuario_id);
